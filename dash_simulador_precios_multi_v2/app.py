@@ -8,6 +8,10 @@ from dash import Dash, Input, Output, State, ctx, dcc, html, dash_table, no_upda
 from dash.exceptions import PreventUpdate
 
 from excel_export import write_simulation_excel
+from drive_data import (
+    MADRYN_FILE_ID, PRICE_FILE_ID, TRELEW_FILE_ID,
+    load_catalog_from_drive, load_freshness_from_drive,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -28,7 +32,7 @@ def to_float(value, default=0.0):
         return default
 
 
-def load_catalog():
+def load_catalog_fallback():
     catalog = {}
     with (DATA_DIR / "catalogo.csv").open(encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
@@ -47,7 +51,7 @@ def load_catalog():
     return catalog
 
 
-def load_expiry():
+def load_expiry_fallback():
     rows = []
     with (DATA_DIR / "vencimientos.csv").open(encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
@@ -55,8 +59,35 @@ def load_expiry():
     return rows
 
 
-CATALOG = load_catalog()
-EXPIRY = load_expiry()
+def reload_sources():
+    """Load each operational source from Google Drive, with bundled CSV fallback."""
+    fallback_catalog = load_catalog_fallback()
+    fallback_expiry = load_expiry_fallback()
+    status = {}
+
+    try:
+        catalog = load_catalog_from_drive(PRICE_FILE_ID)
+        status["Precios"] = {"ok": True, "detail": f"Drive · {len(catalog)} SKU"}
+    except Exception as exc:
+        catalog = fallback_catalog
+        status["Precios"] = {"ok": False, "detail": f"respaldo local · {type(exc).__name__}"}
+
+    expiry = []
+    for branch, file_id in (("Trelew", TRELEW_FILE_ID), ("Madryn", MADRYN_FILE_ID)):
+        try:
+            rows = load_freshness_from_drive(file_id, branch, catalog)
+            expiry.extend(rows)
+            status[f"Frescura {branch}"] = {"ok": True, "detail": f"Drive · {len(rows)} lotes"}
+        except Exception as exc:
+            rows = [r for r in fallback_expiry if r.get("sucursal") == branch]
+            expiry.extend(rows)
+            status[f"Frescura {branch}"] = {"ok": False, "detail": f"respaldo local · {type(exc).__name__}"}
+
+    status["loaded_at"] = datetime.now(AR_TZ).strftime("%d/%m/%Y %H:%M")
+    return catalog, expiry, status
+
+
+CATALOG, EXPIRY, DATA_STATUS = reload_sources()
 
 
 def now_ar():
@@ -240,6 +271,23 @@ def card(title, value_id, subtitle=None, accent=False):
     return html.Div(children, className="metric-card accent" if accent else "metric-card")
 
 
+def data_status_children():
+    items = []
+    for name in ("Precios", "Frescura Trelew", "Frescura Madryn"):
+        info = DATA_STATUS.get(name, {})
+        ok = bool(info.get("ok"))
+        items.append(
+            html.Div(
+                [
+                    html.Span("●", className="source-dot ok" if ok else "source-dot warn"),
+                    html.Div([html.Strong(name), html.Span(info.get("detail", "sin datos"))]),
+                ],
+                className="source-item",
+            )
+        )
+    return items
+
+
 app = Dash(__name__, title="Simulador Multi-SKU · ERP")
 server = app.server
 
@@ -247,6 +295,7 @@ app.layout = html.Div(
     className="app-shell",
     children=[
         dcc.Store(id="simulation-store", storage_type="session"),
+        dcc.Store(id="data-version", data=0),
         dcc.Download(id="excel-download"),
         html.Div(
             className="header",
@@ -261,6 +310,30 @@ app.layout = html.Div(
                     ]
                 ),
                 html.Div("Factor sugerido: × 1,30", className="factor-chip"),
+            ],
+        ),
+        html.Div(
+            className="panel source-panel",
+            children=[
+                html.Div(
+                    [
+                        html.Div("FUENTES DE DATOS", className="eyebrow"),
+                        html.Div(id="data-source-status", className="source-items", children=data_status_children()),
+                        html.Div(
+                            f"Última carga: {DATA_STATUS.get('loaded_at', '—')} · Google Drive",
+                            id="data-loaded-at",
+                            className="source-loaded-at",
+                        ),
+                    ],
+                    className="source-copy",
+                ),
+                html.Div(
+                    [
+                        html.Button("↻ Actualizar datos", id="refresh-data-btn", n_clicks=0, className="secondary-btn refresh-btn"),
+                        html.Div(id="data-refresh-feedback", className="refresh-feedback"),
+                    ],
+                    className="source-actions",
+                ),
             ],
         ),
         html.Div(
@@ -464,6 +537,25 @@ app.layout = html.Div(
 
 
 @app.callback(
+    Output("data-version", "data"),
+    Output("data-source-status", "children"),
+    Output("data-loaded-at", "children"),
+    Output("data-refresh-feedback", "children"),
+    Input("refresh-data-btn", "n_clicks"),
+    State("data-version", "data"),
+    prevent_initial_call=True,
+)
+def refresh_data(n_clicks, version):
+    global CATALOG, EXPIRY, DATA_STATUS
+    if not n_clicks:
+        raise PreventUpdate
+    CATALOG, EXPIRY, DATA_STATUS = reload_sources()
+    all_drive = all(DATA_STATUS.get(name, {}).get("ok") for name in ("Precios", "Frescura Trelew", "Frescura Madryn"))
+    feedback = "Datos recargados desde Google Drive." if all_drive else "Actualización completada con al menos una fuente de respaldo local."
+    return (version or 0) + 1, data_status_children(), f"Última carga: {DATA_STATUS.get('loaded_at', '—')} · Google Drive", feedback
+
+
+@app.callback(
     Output("value-label", "children"),
     Output("value-input", "min"),
     Output("value-input", "max"),
@@ -500,8 +592,9 @@ def switch_mode(mode, current_value):
     Input("value-input", "value"),
     Input("bultos-input", "value"),
     Input("branch-filter", "value"),
+    Input("data-version", "data"),
 )
-def calculate(sku_raw, mode, value, bultos, branch):
+def calculate(sku_raw, mode, value, bultos, branch, _data_version):
     sku = str(sku_raw or "").strip()
     product = CATALOG.get(sku)
     blank = "—"
@@ -584,6 +677,7 @@ def calculate(sku_raw, mode, value, bultos, branch):
     Output("list-feedback", "className"),
     Input("add-sku-btn", "n_clicks"),
     Input("clear-list-btn", "n_clicks"),
+    Input("refresh-data-btn", "n_clicks"),
     State("simulation-store", "data"),
     State("sku-input", "value"),
     State("mode-input", "value"),
@@ -592,12 +686,15 @@ def calculate(sku_raw, mode, value, bultos, branch):
     State("branch-filter", "value"),
     prevent_initial_call=True,
 )
-def manage_list(add_clicks, clear_clicks, current_items, sku, mode, value, bultos, branch):
+def manage_list(add_clicks, clear_clicks, refresh_clicks, current_items, sku, mode, value, bultos, branch):
     trigger = ctx.triggered_id
     items = list(current_items or [])
 
     if trigger == "clear-list-btn":
         return [], "Listado vaciado.", "list-feedback neutral"
+
+    if trigger == "refresh-data-btn":
+        return [], "Datos actualizados. El listado se vació para no mezclar precios de distintas cargas.", "list-feedback neutral"
 
     if trigger != "add-sku-btn":
         raise PreventUpdate

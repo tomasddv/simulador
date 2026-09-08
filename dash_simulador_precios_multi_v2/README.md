@@ -70,3 +70,23 @@ Abrir `http://127.0.0.1:8050`.
 ## Validación ERP
 
 Ver `VALIDACION.md` para el control de los SKU 2218 y 30793 contra el ERP.
+
+## Fuentes de datos en Google Drive
+
+La versión online intenta leer estas fuentes públicas directamente desde Google Drive:
+
+- Lista de precios: `11bArEuSP1JLoHnQRgJSnt6kRY7xeCuv5`
+- Frescura Trelew: `1w5ydKY-p8pkOphqeIRGXiTdrfHnVYFnM`
+- Frescura Madryn: `18rSCdJrYcQ_8nyWHULXd12oFO8HqkC7p`
+
+El dashboard muestra el estado de las tres fuentes y tiene el botón **Actualizar datos**. Si Drive no responde, usa los CSV incluidos en `data/` como respaldo para que la app no se caiga.
+
+### Importante para la actualización diaria
+
+Para que Render siga leyendo automáticamente los archivos, mantené los mismos archivos/IDs de Drive y reemplazá o actualizá su contenido. Si se crea un archivo nuevo con otro ID, hay que cambiar el ID en `drive_data.py` o definir en Render estas variables de entorno:
+
+- `DRIVE_PRICE_FILE_ID`
+- `DRIVE_TRELEW_FILE_ID`
+- `DRIVE_MADRYN_FILE_ID`
+
+Así se puede cambiar una fuente sin modificar código.
