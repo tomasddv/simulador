@@ -137,9 +137,10 @@ def parse_price_catalog(xlsx_bytes: bytes):
             "lista": lista,
             "precio_base_bulto": precio_base,
             "p_final_bulto": p_final,
-            # Campos de compatibilidad con versiones anteriores del Dash.
-            "final_actual_bulto": p_final,
-            "final_actual_unidad": (p_final / units) if units else 0,
+            # Final comercial sin bonificación: el ERP/exportación suma un 3% del Precio Base
+            # sobre el P. Final cuando no existe descuento.
+            "final_actual_bulto": p_final + (precio_base * 0.03),
+            "final_actual_unidad": ((p_final + (precio_base * 0.03)) / units) if units else 0,
             "evidencia": "Google Drive · plantillaPreciosColumna",
         }
     if not catalog:
