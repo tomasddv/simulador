@@ -117,7 +117,7 @@ def write_simulation_excel(buffer: BinaryIO, items: Iterable[dict]) -> None:
 
         # Fórmulas con valor cacheado: el archivo abre con el resultado visible y sigue siendo editable.
         ws.write_formula(idx, 8, f"=F{excel_row}*H{excel_row}", money3_fmt, float(item.get("bonif_bulto", 0) or 0))
-        ws.write_formula(idx, 9, f"=G{excel_row}*(1-H{excel_row})", money3_fmt, float(item.get("final_bulto", 0) or 0))
+        ws.write_formula(idx, 9, f"=IF(H{excel_row}=0,G{excel_row}+(F{excel_row}*3%),G{excel_row}*(1-H{excel_row}))", money3_fmt, float(item.get("final_bulto", 0) or 0))
         ws.write_formula(idx, 10, f"=IFERROR(J{excel_row}/E{excel_row},0)", money2_fmt, float(item.get("final_unit", 0) or 0))
         ws.write_formula(idx, 11, f"=K{excel_row}*{MARGEN_SUGERIDO}", money2_fmt, float(item.get("suggested", 0) or 0))
         ws.write_formula(idx, 12, f"=I{excel_row}*D{excel_row}", money2_fmt, float(item.get("gasto_total", 0) or 0))

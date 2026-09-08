@@ -130,7 +130,16 @@ def calculate_from_discount(product, discount_pct, bultos=1):
     units = product["unidades_bulto"]
 
     bonif_bulto = precio_base * discount
-    final_bulto = p_final_bulto * (1 - discount)
+
+    # Regla validada contra ERP:
+    # - Sin bonificación, el final comercial incluye el recargo observado del 3%
+    #   sobre Precio Base (ej. SKU 32642: 28.493,062 + 642,919 = 29.135,981).
+    # - Con bonificación > 0%, el ERP calcula el neto sobre P. Final.
+    if abs(discount_pct) < 1e-12:
+        final_bulto = product.get("final_actual_bulto", p_final_bulto + precio_base * 0.03)
+    else:
+        final_bulto = p_final_bulto * (1 - discount)
+
     final_unit = final_bulto / units if units else 0
     suggested = final_unit * MARGEN_SUGERIDO
 
@@ -389,7 +398,7 @@ app.layout = html.Div(
                     children=[
                         html.Div([html.Span("Unidades/bulto"), html.Strong(id="product-units")]),
                         html.Div([html.Span("Precio base/bulto"), html.Strong(id="current-base")]),
-                        html.Div([html.Span("P. Final ERP/bulto"), html.Strong(id="current-bulto")]),
+                        html.Div([html.Span("Final sin descuento/bulto"), html.Strong(id="current-bulto")]),
                         html.Div([html.Span("Sugerido s/desc. ×1,30"), html.Strong(id="current-suggested")]),
                     ],
                 ),
@@ -619,7 +628,8 @@ def calculate(sku_raw, mode, value, bultos, branch, _data_version):
         )
 
     bultos_num = max(to_float(bultos, 1), 0)
-    current_unit = product["p_final_bulto"] / product["unidades_bulto"]
+    current_final = product.get("final_actual_bulto", product["p_final_bulto"] + product["precio_base_bulto"] * 0.03)
+    current_unit = current_final / product["unidades_bulto"]
     current_suggested = current_unit * MARGEN_SUGERIDO
 
     if value is None:
@@ -643,7 +653,7 @@ def calculate(sku_raw, mode, value, bultos, branch, _data_version):
     if result is None:
         return (
             "Producto encontrado. Completá el valor para calcular.", "status-message neutral", f"SKU {sku}", product["descripcion"],
-            number(product["unidades_bulto"], 0), money(product["precio_base_bulto"], 3), money(product["p_final_bulto"], 3), money(current_suggested, 2),
+            number(product["unidades_bulto"], 0), money(product["precio_base_bulto"], 3), money(current_final, 3), money(current_suggested, 2),
             blank, blank, blank, blank, blank, blank, "", lots, no_expiry
         )
 
@@ -661,11 +671,14 @@ def calculate(sku_raw, mode, value, bultos, branch, _data_version):
         if mode == "suggested":
             note = f"Para llegar a un sugerido de {money(result['suggested'])}, el final neto por unidad debe quedar en {money(result['final_unit'])}."
         else:
-            note = f"Aplicando {pct(result['discount_pct'])}, el sugerido resultante queda en {money(result['suggested'])}."
+            if abs(result["discount_pct"]) < 1e-12:
+                note = f"Sin bonificación: final comercial {money(result['final_bulto'], 3)} y sugerido {money(result['suggested'])}."
+            else:
+                note = f"Aplicando {pct(result['discount_pct'])}, el sugerido resultante queda en {money(result['suggested'])}."
 
     return (
         status, status_class, f"SKU {sku}", product["descripcion"],
-        number(product["unidades_bulto"], 0), money(product["precio_base_bulto"], 3), money(product["p_final_bulto"], 3), money(current_suggested, 2),
+        number(product["unidades_bulto"], 0), money(product["precio_base_bulto"], 3), money(current_final, 3), money(current_suggested, 2),
         pct(result["discount_pct"]), money(result["final_unit"]), money(result["suggested"]), money(result["final_bulto"], 3),
         money(result["bonif_bulto"], 3), money(result["gasto_total"], 2), note, lots, no_expiry
     )
