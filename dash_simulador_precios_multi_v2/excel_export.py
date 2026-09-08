@@ -81,9 +81,9 @@ def write_simulation_excel(buffer: BinaryIO, items: Iterable[dict]) -> None:
     ws.hide_gridlines(2)
     ws.freeze_panes(4, 0)
     ws.set_tab_color(cyan)
-    ws.merge_range("A1:R1", "SIMULACIÓN COMERCIAL POR SKU", title_fmt)
+    ws.merge_range("A1:T1", "SIMULACIÓN COMERCIAL POR SKU", title_fmt)
     ws.merge_range(
-        "A2:R2",
+        "A2:T2",
         "Resumen de descuentos, precio sugerido, stock y vencimientos. Las columnas calculadas conservan fórmulas editables.",
         subtitle_fmt,
     )
@@ -93,9 +93,9 @@ def write_simulation_excel(buffer: BinaryIO, items: Iterable[dict]) -> None:
     headers = [
         "SKU", "Descripción", "Sucursal", "Bultos a bonificar", "Unidades/bulto",
         "Precio base/bulto", "P. Final ERP/bulto", "Descuento %", "Bonif. ERP/bulto",
-        "Final ERP/bulto", "Final/unidad", "Precio sugerido", "Gasto total bonificación",
-        "Stock total (bultos)", "Próximo vencimiento", "Stock próx. vencimiento",
-        "Stock / vencimientos", "Alerta mes corriente",
+        "Final ERP/bulto", "Percepción 3%/bulto", "Final cliente/bulto", "Final cliente/unidad",
+        "Precio sugerido", "Gasto total bonificación", "Stock total (bultos)",
+        "Próximo vencimiento", "Stock próx. vencimiento", "Stock / vencimientos", "Alerta mes corriente",
     ]
     header_row = 3  # zero-based => Excel row 4
     for c, value in enumerate(headers):
@@ -115,33 +115,35 @@ def write_simulation_excel(buffer: BinaryIO, items: Iterable[dict]) -> None:
         discount_decimal = float(item.get("discount_pct", 0) or 0) / 100.0
         ws.write_number(idx, 7, discount_decimal, pct_fmt)
 
-        # Fórmulas con valor cacheado: el archivo abre con el resultado visible y sigue siendo editable.
+        # Fórmulas: ERP por un lado y precio cliente con percepción 3% por otro.
         ws.write_formula(idx, 8, f"=F{excel_row}*H{excel_row}", money3_fmt, float(item.get("bonif_bulto", 0) or 0))
-        ws.write_formula(idx, 9, f"=IF(H{excel_row}=0,G{excel_row}+(F{excel_row}*3%),G{excel_row}*(1-H{excel_row}))", money3_fmt, float(item.get("final_bulto", 0) or 0))
-        ws.write_formula(idx, 10, f"=IFERROR(J{excel_row}/E{excel_row},0)", money2_fmt, float(item.get("final_unit", 0) or 0))
-        ws.write_formula(idx, 11, f"=K{excel_row}*{MARGEN_SUGERIDO}", money2_fmt, float(item.get("suggested", 0) or 0))
-        ws.write_formula(idx, 12, f"=I{excel_row}*D{excel_row}", money2_fmt, float(item.get("gasto_total", 0) or 0))
-        ws.write_number(idx, 13, float(item.get("stock_total", 0) or 0), num2_fmt)
+        ws.write_formula(idx, 9, f"=G{excel_row}*(1-H{excel_row})", money3_fmt, float(item.get("final_erp_bulto", 0) or 0))
+        ws.write_formula(idx, 10, f"=F{excel_row}*3%*(1-H{excel_row})", money3_fmt, float(item.get("percepcion_bulto", 0) or 0))
+        ws.write_formula(idx, 11, f"=J{excel_row}+K{excel_row}", money3_fmt, float(item.get("final_bulto", 0) or 0))
+        ws.write_formula(idx, 12, f"=IFERROR(L{excel_row}/E{excel_row},0)", money2_fmt, float(item.get("final_unit", 0) or 0))
+        ws.write_formula(idx, 13, f"=M{excel_row}*{MARGEN_SUGERIDO}", money2_fmt, float(item.get("suggested", 0) or 0))
+        ws.write_formula(idx, 14, f"=I{excel_row}*D{excel_row}", money2_fmt, float(item.get("gasto_total", 0) or 0))
+        ws.write_number(idx, 15, float(item.get("stock_total", 0) or 0), num2_fmt)
 
         next_date = _parse_iso_date(item.get("proximo_vencimiento_iso"))
         if next_date:
-            ws.write_datetime(idx, 14, next_date, date_fmt)
+            ws.write_datetime(idx, 16, next_date, date_fmt)
         else:
-            ws.write_blank(idx, 14, None, date_fmt)
-        ws.write_number(idx, 15, float(item.get("stock_proximo", 0) or 0), num2_fmt)
-        ws.write(idx, 16, item.get("vencimientos_resumen", ""), wrap_fmt)
+            ws.write_blank(idx, 16, None, date_fmt)
+        ws.write_number(idx, 17, float(item.get("stock_proximo", 0) or 0), num2_fmt)
+        ws.write(idx, 18, item.get("vencimientos_resumen", ""), wrap_fmt)
         alert = item.get("alerta_mes", "OK")
-        ws.write(idx, 17, alert, alert_fmt if alert.startswith("⚠") else ok_fmt)
+        ws.write(idx, 19, alert, alert_fmt if alert.startswith("⚠") else ok_fmt)
 
     data_end_row = 4 + len(items)  # fila Excel final (header=4)
     if items:
         ws.autofilter(3, 0, data_end_row - 1, len(headers) - 1)
-        ws.conditional_format(4, 17, data_end_row - 1, 17, {
+        ws.conditional_format(4, 19, data_end_row - 1, 19, {
             "type": "text", "criteria": "containing", "value": "VENCE ESTE MES",
             "format": alert_fmt,
         })
 
-    widths = [11, 38, 14, 18, 15, 20, 20, 14, 20, 20, 16, 18, 23, 20, 19, 22, 56, 22]
+    widths = [11, 38, 14, 18, 15, 20, 20, 14, 20, 20, 20, 20, 20, 18, 23, 20, 19, 22, 56, 22]
     for c, width in enumerate(widths):
         ws.set_column(c, c, width)
 

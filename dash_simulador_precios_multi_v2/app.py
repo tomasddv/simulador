@@ -123,29 +123,34 @@ def pretty_date(iso_date):
         return iso_date
 
 
+def _perception_no_discount(product):
+    p_final_bulto = product["p_final_bulto"]
+    precio_base = product["precio_base_bulto"]
+    final_actual = product.get("final_actual_bulto")
+    if final_actual is not None and final_actual > p_final_bulto:
+        return final_actual - p_final_bulto
+    return precio_base * 0.03
+
+
 def calculate_from_discount(product, discount_pct, bultos=1):
     discount = discount_pct / 100.0
+    factor = 1 - discount
     p_final_bulto = product["p_final_bulto"]
     precio_base = product["precio_base_bulto"]
     units = product["unidades_bulto"]
 
     bonif_bulto = precio_base * discount
-
-    # Regla validada contra ERP:
-    # - Sin bonificación, el final comercial incluye el recargo observado del 3%
-    #   sobre Precio Base (ej. SKU 32642: 28.493,062 + 642,919 = 29.135,981).
-    # - Con bonificación > 0%, el ERP calcula el neto sobre P. Final.
-    if abs(discount_pct) < 1e-12:
-        final_bulto = product.get("final_actual_bulto", p_final_bulto + precio_base * 0.03)
-    else:
-        final_bulto = p_final_bulto * (1 - discount)
-
+    final_erp_bulto = p_final_bulto * factor
+    percepcion_bulto = _perception_no_discount(product) * factor
+    final_bulto = final_erp_bulto + percepcion_bulto
     final_unit = final_bulto / units if units else 0
     suggested = final_unit * MARGEN_SUGERIDO
 
     return {
         "discount_pct": discount_pct,
         "bonif_bulto": bonif_bulto,
+        "final_erp_bulto": final_erp_bulto,
+        "percepcion_bulto": percepcion_bulto,
         "final_bulto": final_bulto,
         "final_unit": final_unit,
         "suggested": suggested,
@@ -157,21 +162,26 @@ def calculate_from_suggested(product, suggested, bultos=1):
     p_final_bulto = product["p_final_bulto"]
     precio_base = product["precio_base_bulto"]
     units = product["unidades_bulto"]
+    final_sin_desc = product.get("final_actual_bulto", p_final_bulto + precio_base * 0.03)
 
     final_unit = suggested / MARGEN_SUGERIDO
     final_bulto = final_unit * units
-    discount_pct = (1 - final_bulto / p_final_bulto) * 100 if p_final_bulto else 0
+    discount_pct = (1 - final_bulto / final_sin_desc) * 100 if final_sin_desc else 0
+    factor = 1 - discount_pct / 100.0
+    final_erp_bulto = p_final_bulto * factor
+    percepcion_bulto = _perception_no_discount(product) * factor
     bonif_bulto = precio_base * (discount_pct / 100.0)
 
     return {
         "discount_pct": discount_pct,
         "bonif_bulto": bonif_bulto,
+        "final_erp_bulto": final_erp_bulto,
+        "percepcion_bulto": percepcion_bulto,
         "final_bulto": final_bulto,
         "final_unit": final_unit,
         "suggested": suggested,
         "gasto_total": bonif_bulto * bultos,
     }
-
 
 def lots_for_sku(sku, branch="Todas"):
     current = now_ar()
@@ -258,6 +268,8 @@ def build_simulation_entry(sku_raw, mode, value, bultos, branch):
         "p_final_bulto": product["p_final_bulto"],
         "discount_pct": result["discount_pct"],
         "bonif_bulto": result["bonif_bulto"],
+        "final_erp_bulto": result.get("final_erp_bulto", result["final_bulto"]),
+        "percepcion_bulto": result.get("percepcion_bulto", 0),
         "final_bulto": result["final_bulto"],
         "final_unit": result["final_unit"],
         "suggested": result["suggested"],
@@ -409,7 +421,7 @@ app.layout = html.Div(
             children=[
                 card("Descuento", "result-discount", accent=True),
                 card("Bonif. ERP / bulto", "result-cedido"),
-                card("Final ERP / bulto", "result-bulto"),
+                card("Final c/percepción / bulto", "result-bulto"),
                 card("Final por unidad", "result-unit"),
                 card("Precio sugerido", "result-suggested", accent=True),
                 card("Gasto total bonificación", "result-total"),
@@ -672,9 +684,17 @@ def calculate(sku_raw, mode, value, bultos, branch, _data_version):
             note = f"Para llegar a un sugerido de {money(result['suggested'])}, el final neto por unidad debe quedar en {money(result['final_unit'])}."
         else:
             if abs(result["discount_pct"]) < 1e-12:
-                note = f"Sin bonificación: final comercial {money(result['final_bulto'], 3)} y sugerido {money(result['suggested'])}."
+                note = (
+                    f"Sin bonificación: P. Final ERP {money(result['final_erp_bulto'], 3)} + "
+                    f"percepción 3% {money(result['percepcion_bulto'], 3)} = final cliente {money(result['final_bulto'], 3)}. "
+                    f"Sugerido: {money(result['suggested'])}."
+                )
             else:
-                note = f"Aplicando {pct(result['discount_pct'])}, el sugerido resultante queda en {money(result['suggested'])}."
+                note = (
+                    f"Aplicando {pct(result['discount_pct'])}: final ERP {money(result['final_erp_bulto'], 3)} + "
+                    f"percepción 3% {money(result['percepcion_bulto'], 3)} = final cliente {money(result['final_bulto'], 3)}. "
+                    f"Sugerido: {money(result['suggested'])}."
+                )
 
     return (
         status, status_class, f"SKU {sku}", product["descripcion"],
