@@ -173,3 +173,30 @@ body {
   .source-actions { align-items: stretch; }
   .refresh-feedback { max-width: none; text-align: left; }
 }
+
+/* --- Fuente automática Drive: compacta y legible --- */
+.source-items {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.source-item {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #22314a;
+  border-radius: 12px;
+  background: rgba(7,16,31,.42);
+}
+.source-item > div { min-width: 0; }
+.source-item span:not(.source-dot) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.source-loaded-at { color: #94a3b8; }
+@media (max-width: 900px) {
+  .source-items { grid-template-columns: 1fr; }
+  .source-item span:not(.source-dot) { white-space: normal; }
+}
