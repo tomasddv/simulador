@@ -9,8 +9,7 @@ from dash.exceptions import PreventUpdate
 
 from excel_export import write_simulation_excel
 from drive_data import (
-    MADRYN_FILE_ID, PRICE_FILE_ID, TRELEW_FILE_ID,
-    load_catalog_from_drive, load_freshness_from_drive,
+    load_catalog_from_drive, load_freshness_from_drive, resolve_drive_sources,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -60,30 +59,59 @@ def load_expiry_fallback():
 
 
 def reload_sources():
-    """Load each operational source from Google Drive, with bundled CSV fallback."""
+    """Descubre los archivos más recientes del Drive y recarga las bases."""
     fallback_catalog = load_catalog_fallback()
     fallback_expiry = load_expiry_fallback()
     status = {}
 
     try:
-        catalog = load_catalog_from_drive(PRICE_FILE_ID)
-        status["Precios"] = {"ok": True, "detail": f"Drive · {len(catalog)} SKU"}
+        sources = resolve_drive_sources()
+    except Exception as exc:
+        sources = None
+        status["discovery_error"] = f"{type(exc).__name__}: {exc}"
+
+    if sources:
+        price_source = sources["price"]
+        trelew_source = sources["trelew"]
+        madryn_source = sources["madryn"]
+        method = sources.get("method", "Drive")
+    else:
+        price_source = trelew_source = madryn_source = None
+        method = "respaldo local"
+
+    try:
+        if not price_source:
+            raise RuntimeError("No se pudo resolver la lista de precios")
+        catalog = load_catalog_from_drive(price_source["id"])
+        status["Precios"] = {
+            "ok": True,
+            "detail": f"{len(catalog)} SKU · {price_source.get('name', 'lista detectada')}",
+        }
     except Exception as exc:
         catalog = fallback_catalog
         status["Precios"] = {"ok": False, "detail": f"respaldo local · {type(exc).__name__}"}
 
     expiry = []
-    for branch, file_id in (("Trelew", TRELEW_FILE_ID), ("Madryn", MADRYN_FILE_ID)):
+    for branch, source in (("Trelew", trelew_source), ("Madryn", madryn_source)):
         try:
-            rows = load_freshness_from_drive(file_id, branch, catalog)
+            if not source:
+                raise RuntimeError(f"No se pudo resolver Frescura {branch}")
+            rows = load_freshness_from_drive(source["id"], branch, catalog)
             expiry.extend(rows)
-            status[f"Frescura {branch}"] = {"ok": True, "detail": f"Drive · {len(rows)} lotes"}
+            status[f"Frescura {branch}"] = {
+                "ok": True,
+                "detail": f"{len(rows)} lotes · {source.get('name', 'archivo detectado')}",
+            }
         except Exception as exc:
             rows = [r for r in fallback_expiry if r.get("sucursal") == branch]
             expiry.extend(rows)
             status[f"Frescura {branch}"] = {"ok": False, "detail": f"respaldo local · {type(exc).__name__}"}
 
     status["loaded_at"] = datetime.now(AR_TZ).strftime("%d/%m/%Y %H:%M")
+    status["method"] = method
+    if sources:
+        status["price_file"] = price_source.get("name", "")
+        status["price_id"] = price_source.get("id", "")
     return catalog, expiry, status
 
 
@@ -341,7 +369,7 @@ app.layout = html.Div(
                         html.Div("FUENTES DE DATOS", className="eyebrow"),
                         html.Div(id="data-source-status", className="source-items", children=data_status_children()),
                         html.Div(
-                            f"Última carga: {DATA_STATUS.get('loaded_at', '—')} · Google Drive",
+                            f"Última carga: {DATA_STATUS.get('loaded_at', '—')} · modo automático ({DATA_STATUS.get('method', 'Drive')})",
                             id="data-loaded-at",
                             className="source-loaded-at",
                         ),
@@ -572,8 +600,12 @@ def refresh_data(n_clicks, version):
         raise PreventUpdate
     CATALOG, EXPIRY, DATA_STATUS = reload_sources()
     all_drive = all(DATA_STATUS.get(name, {}).get("ok") for name in ("Precios", "Frescura Trelew", "Frescura Madryn"))
-    feedback = "Datos recargados desde Google Drive." if all_drive else "Actualización completada con al menos una fuente de respaldo local."
-    return (version or 0) + 1, data_status_children(), f"Última carga: {DATA_STATUS.get('loaded_at', '—')} · Google Drive", feedback
+    feedback = (
+        f"Datos recargados. Lista elegida automáticamente: {DATA_STATUS.get('price_file', '—')}."
+        if all_drive else
+        "Actualización completada con al menos una fuente de respaldo local."
+    )
+    return (version or 0) + 1, data_status_children(), f"Última carga: {DATA_STATUS.get('loaded_at', '—')} · modo automático ({DATA_STATUS.get('method', 'Drive')})", feedback
 
 
 @app.callback(

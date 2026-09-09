@@ -1,3 +1,5 @@
 dash>=2.18,<4
 gunicorn>=22,<24
 XlsxWriter>=3.2,<4
+google-auth>=2.35,<3
+requests>=2.32,<3
